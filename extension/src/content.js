@@ -9,6 +9,9 @@ let lineCounter = 0;
 const finalizedNodeSet = new WeakSet();
 let transcriptContainer = null;
 let transcriptEndTimer = null;
+let isTranscriptActive = false;
+let buttonObserver = null;
+let currentSessionId = null;
 
 function findTranscriptContainer() {
   // Look for CaseViewNet transcript container - likely contains div-row elements
@@ -99,6 +102,12 @@ function buildWordEventsFromLine(rowDetails, lineIndex) {
 function maybeFinalizePreviousLine(container, newChild) {
   console.log('[Transcript Extractor] Attempting to finalize previous line...');
   
+  // Only process if transcript is active
+  if (!isTranscriptActive) {
+    console.log('[Transcript Extractor] Transcript not active, skipping line processing');
+    return;
+  }
+  
   // Look for .div-row elements specifically
   const rows = Array.from(container.querySelectorAll('.div-row'));
   console.log('[Transcript Extractor] Found', rows.length, 'total .div-row elements');
@@ -113,7 +122,7 @@ function maybeFinalizePreviousLine(container, newChild) {
   // When 4th row is added, process 2nd row
   // When 5th row is added, process 3rd row
   // etc.
-  const rowToProcess = rows.length - 3; // This gives us the row to process
+  const rowToProcess = rows.length - 2; // This gives us the row to process (changed from n-3 to n-2)
   
   if (rowToProcess >= 0) {
     const finalized = rows[rowToProcess];
@@ -126,19 +135,18 @@ function maybeFinalizePreviousLine(container, newChild) {
 
     // Extract all details from the row
     const rowDetails = extractRowDetails(finalized);
-    console.log('[Transcript Extractor] Extracted details:', rowDetails);
     
     if (!rowDetails.transcriptText) {
-      console.log('[Transcript Extractor] No transcript text found, skipping');
       return;
     }
 
+    // Session ID-based detection handles new transcript detection
+    // No need to check for "1-1" here anymore
+
     const currentLineIndex = ++lineCounter;
     const items = buildWordEventsFromLine(rowDetails, currentLineIndex);
-    console.log('[Transcript Extractor] Built', items.length, 'word events');
     
     if (items.length) {
-      console.log('[Transcript Extractor] Sending word batch to background...');
       chrome.runtime.sendMessage({ type: 'word.batch', items });
     }
     finalizedNodeSet.add(finalized);
@@ -197,7 +205,7 @@ function resetTranscriptEndTimer() {
     // Send transcript end event
     chrome.runtime.sendMessage({ 
       type: 'transcript.end', 
-      sessionId: `cvn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      sessionId: currentSessionId,
       totalLines: lineCounter,
       timestampMs: Date.now()
     });
@@ -208,22 +216,185 @@ function resetTranscriptEndTimer() {
   }, TRANSCRIPT_END_TIMEOUT);
 }
 
+function handleNewTranscriptStart(rowDetails) {
+  console.log('[Transcript Extractor] *** NEW TRANSCRIPT STARTED ***');
+  
+  // Generate new session ID for the new transcript
+  const newSessionId = `cvn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  
+  // Check if this is actually a new transcript (different session ID)
+  if (currentSessionId && currentSessionId === newSessionId) {
+    console.log('[Transcript Extractor] Same session ID, not a new transcript');
+    return;
+  }
+  
+  // Update session ID
+  currentSessionId = newSessionId;
+  
+  // Reset counters for new transcript
+  lineCounter = 0;
+  finalizedNodeSet = new WeakSet();
+  
+  // Send new transcript start event
+  chrome.runtime.sendMessage({
+    type: 'transcript.start',
+    sessionId: currentSessionId,
+    timestamp: rowDetails.timestamp,
+    lineNumber: rowDetails.lineNumber,
+    timestampMs: Date.now()
+  });
+  
+  console.log('[Transcript Extractor] Session:', currentSessionId, 'Line:', rowDetails.lineNumber);
+}
+
+function detectNewTranscriptBySessionId() {
+  // If we don't have a current session ID, this is definitely a new transcript
+  if (!currentSessionId) {
+    console.log('[Transcript Extractor] No existing session ID - new transcript detected');
+    const newSessionId = `cvn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return newSessionId;
+  }
+  
+  // Check if enough time has passed since last session (indicating new transcript)
+  const currentTime = Date.now();
+  const lastSessionTime = parseInt(currentSessionId.split('-')[1]);
+  const timeDiff = currentTime - lastSessionTime;
+  
+  // If more than 30 seconds have passed, consider it a new transcript
+  if (timeDiff > 30000) {
+    console.log('[Transcript Extractor] Time gap detected - new transcript:', timeDiff + 'ms');
+    const newSessionId = `cvn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return newSessionId;
+  }
+  
+  // Otherwise, continue with existing session
+  console.log('[Transcript Extractor] Continuing existing session:', currentSessionId);
+  return currentSessionId;
+}
+
+function resumeTranscriptSession() {
+  console.log('[Transcript Extractor] Resuming transcript processing');
+  isTranscriptActive = true;
+  
+  // Use session ID detection to determine if this is a new transcript
+  const sessionId = detectNewTranscriptBySessionId();
+  
+  // If we got a new session ID, this is a new transcript
+  if (sessionId !== currentSessionId) {
+    console.log('[Transcript Extractor] *** NEW TRANSCRIPT DETECTED BY SESSION ID ***');
+    currentSessionId = sessionId;
+    lineCounter = 0;
+    finalizedNodeSet = new WeakSet();
+    
+    // Send new transcript start event
+    chrome.runtime.sendMessage({
+      type: 'transcript.start',
+      sessionId: currentSessionId,
+      timestamp: new Date().toLocaleTimeString(),
+      lineNumber: '1-1',
+      timestampMs: Date.now()
+    });
+  } else {
+    // Send resume event for existing session
+    chrome.runtime.sendMessage({
+      type: 'transcript.resume',
+      sessionId: currentSessionId,
+      timestampMs: Date.now()
+    });
+  }
+  
+  console.log('[Transcript Extractor] Transcript processing resumed for session:', currentSessionId);
+}
+
+function pauseTranscriptSession() {
+  console.log('[Transcript Extractor] Pausing transcript processing');
+  isTranscriptActive = false;
+  
+  // Clear transcript end timer
+  if (transcriptEndTimer) {
+    clearTimeout(transcriptEndTimer);
+    transcriptEndTimer = null;
+  }
+  
+  // Send pause event (keep session and data intact)
+  chrome.runtime.sendMessage({
+    type: 'transcript.pause',
+    sessionId: currentSessionId,
+    totalLines: lineCounter,
+    timestampMs: Date.now()
+  });
+  
+  console.log('[Transcript Extractor] Transcript processing paused for session:', currentSessionId);
+}
+
+function monitorConnectButton() {
+  const button = document.getElementById('buttonConnect');
+  if (!button) {
+    console.log('[Transcript Extractor] Connect button not found, will retry...');
+    setTimeout(monitorConnectButton, 1000);
+    return;
+  }
+  
+  console.log('[Transcript Extractor] Monitoring connect button by ID:', button.id);
+  console.log('[Transcript Extractor] Initial button state:', button.textContent.trim());
+  
+  // Create observer for button changes (text, classes, attributes)
+  buttonObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' || mutation.type === 'characterData' || mutation.type === 'attributes') {
+        const buttonText = button.textContent.trim();
+        console.log('[Transcript Extractor] Button changed - Text:', buttonText, 'ID:', button.id);
+        
+        if (buttonText === 'Disconnect' && !isTranscriptActive) {
+          // User clicked Connect - resume transcript processing
+          console.log('[Transcript Extractor] *** CONNECT BUTTON CLICKED - RESUMING ***');
+          resumeTranscriptSession();
+        } else if (buttonText === 'Connect' && isTranscriptActive) {
+          // User clicked Disconnect - pause transcript processing
+          console.log('[Transcript Extractor] *** DISCONNECT BUTTON CLICKED - PAUSING ***');
+          pauseTranscriptSession();
+        }
+      }
+    }
+  });
+  
+  // Observe the button for all changes
+  buttonObserver.observe(button, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ['class']
+  });
+  
+  // Check initial state
+  const initialText = button.textContent.trim();
+  if (initialText === 'Disconnect' && !isTranscriptActive) {
+    console.log('[Transcript Extractor] Initial state: Already connected, resuming processing');
+    resumeTranscriptSession();
+  }
+}
+
 function processExistingRows(container) {
   console.log('[Transcript Extractor] Processing any existing rows...');
   
   const rows = Array.from(container.querySelectorAll('.div-row'));
   console.log('[Transcript Extractor] Found', rows.length, 'existing .div-row elements');
   
-  // Only process if we have at least 3 rows (so we can process the 1st one)
-  if (rows.length >= 3) {
+  
+  // Only process if we have at least 2 rows (so we can process the 1st one)
+  if (rows.length >= 2) {
     // Process rows following the sliding window pattern
-    for (let i = 0; i <= rows.length - 3; i++) {
+    for (let i = 0; i <= rows.length - 2; i++) {
       const finalized = rows[i];
       
       if (finalizedNodeSet.has(finalized)) continue;
 
       const rowDetails = extractRowDetails(finalized);
       if (!rowDetails.transcriptText) continue;
+
+      // Session ID-based detection handles new transcript detection
+      // No need to check for "1-1" here anymore
 
       const currentLineIndex = ++lineCounter;
       const items = buildWordEventsFromLine(rowDetails, currentLineIndex);
@@ -248,11 +419,36 @@ function bootstrap() {
     transcriptContainer = document.body;
   }
   
+  // Start monitoring the connect button
+  monitorConnectButton();
+  
   // Check if there are any .div-row elements already
   const existingRows = transcriptContainer.querySelectorAll('.div-row');
   console.log('[Transcript Extractor] Found', existingRows.length, 'existing .div-row elements');
   
-  // Process any existing rows
+  // If we have existing rows, this might be a new transcript
+  if (existingRows.length > 0) {
+    console.log('[Transcript Extractor] Existing transcript content detected - checking for new session');
+    // Use session ID detection to determine if this is a new transcript
+    const sessionId = detectNewTranscriptBySessionId();
+    if (sessionId !== currentSessionId) {
+      console.log('[Transcript Extractor] *** NEW TRANSCRIPT DETECTED ON PAGE LOAD ***');
+      currentSessionId = sessionId;
+      lineCounter = 0;
+      finalizedNodeSet = new WeakSet();
+      
+      // Send new transcript start event
+      chrome.runtime.sendMessage({
+        type: 'transcript.start',
+        sessionId: currentSessionId,
+        timestamp: new Date().toLocaleTimeString(),
+        lineNumber: '1-1',
+        timestampMs: Date.now()
+      });
+    }
+  }
+  
+  // Process any existing rows (only if transcript is active)
   processExistingRows(transcriptContainer);
   
   attachObserver(transcriptContainer);

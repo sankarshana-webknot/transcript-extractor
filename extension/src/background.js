@@ -43,6 +43,12 @@ async function setOutbox(queue) {
   await chrome.storage.local.set({ [OUTBOX_KEY]: queue });
 }
 
+async function clearCachedData() {
+  console.log('[Background] Clearing cached transcript data');
+  await chrome.storage.local.remove([OUTBOX_KEY]);
+  console.log('[Background] Cached data cleared');
+}
+
 async function enqueue(items) {
   if (!items || !items.length) return;
   const [meta, outbox] = await Promise.all([getMeta(), getOutbox()]);
@@ -110,6 +116,11 @@ async function ensureSocket() {
     websocket.addEventListener("open", async () => {
       isConnecting = false;
       reconnectAttempt = 0;
+      
+      // Clear cached data on server restart/reconnect
+      console.log('[Background] WebSocket connected - clearing cached data');
+      await clearCachedData();
+      
       // Identify session on connect
       websocket.send(JSON.stringify({ type: "hello", sessionId }));
       scheduleSend();
@@ -164,7 +175,6 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
       break;
     }
     case "word.batch": {
-      console.log('[Background] Received word batch with', message.items?.length || 0, 'items');
       // Expect message.items: array of word events already structured
       enqueue(message.items);
       break;
@@ -178,6 +188,46 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
         totalLines: message.totalLines,
         timestampMs: message.timestampMs
       }]);
+      break;
+    }
+    case "transcript.resume": {
+      console.log('[Background] Transcript processing resumed:', message.sessionId);
+      // Update session ID in meta
+      setMeta({ sessionId: message.sessionId });
+      // Send resume event to server
+      enqueue([{
+        type: 'transcript.resume',
+        sessionId: message.sessionId,
+        timestampMs: message.timestampMs
+      }]);
+      break;
+    }
+    case "transcript.pause": {
+      console.log('[Background] Transcript processing paused:', message.sessionId);
+      // Send pause event to server (keep data intact)
+      enqueue([{
+        type: 'transcript.pause',
+        sessionId: message.sessionId,
+        totalLines: message.totalLines,
+        timestampMs: message.timestampMs
+      }]);
+      // Don't clear outbox - keep data for when we resume
+      console.log('[Background] Transcript paused, data preserved');
+      break;
+    }
+    case "transcript.start": {
+      console.log('[Background] New transcript started:', message.sessionId);
+      // Update session ID in meta
+      setMeta({ sessionId: message.sessionId });
+      // Send transcript start event to server
+      enqueue([{
+        type: 'transcript.start',
+        sessionId: message.sessionId,
+        timestamp: message.timestamp,
+        lineNumber: message.lineNumber,
+        timestampMs: message.timestampMs
+      }]);
+      console.log('[Background] New transcript session started');
       break;
     }
     default:
