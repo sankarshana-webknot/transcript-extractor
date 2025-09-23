@@ -1,15 +1,16 @@
 /* Background service worker: maintains outbound WebSocket with acks, retries, and buffering. */
 
 // Configuration constants
-const APPEND_URL = "wss://07ca0616485e.ngrok-free.app/ws/append";
-const CHECK_URL = "wss://07ca0616485e.ngrok-free.app/ws/check";
+const APPEND_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/append";
+const CHECK_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/check";
 const BATCH_SIZE = 50;
-const SEND_INTERVAL = 50;
+const SEND_INTERVAL = 500;
 const MAX_RECONNECT_DELAY = 30000;
 const RECONNECT_DELAY_BASE = 1000;
 
 const OUTBOX_KEY = "outboxQueue";
 const META_KEY = "transportMeta"; // { nextSeq, lastAckSeq, wsUrl, sessionId }
+const SENT_WORDS_KEY = "sentWords"; // Track sent words to prevent duplicates
 
 let websocket = null;
 let wsCheck = null;
@@ -44,10 +45,37 @@ async function setOutbox(queue) {
   await chrome.storage.local.set({ [OUTBOX_KEY]: queue });
 }
 
+async function removeItemFromQueue(seqToRemove) {
+  const outbox = await getOutbox();
+  const filtered = outbox.filter(item => item.seq !== seqToRemove);
+  await setOutbox(filtered);
+  console.log(`[Background] Removed item with seq ${seqToRemove} from queue. Queue size: ${filtered.length}`);
+}
+
+async function getSentWords() {
+  const { [SENT_WORDS_KEY]: sentWords } = await chrome.storage.local.get(SENT_WORDS_KEY);
+  return sentWords || new Set();
+}
+
+async function setSentWords(sentWords) {
+  await chrome.storage.local.set({ [SENT_WORDS_KEY]: Array.from(sentWords) });
+}
+
 async function clearCachedData() {
   console.log('[Background] Clearing cached transcript data');
-  await chrome.storage.local.remove([OUTBOX_KEY]);
+  await chrome.storage.local.remove([OUTBOX_KEY, SENT_WORDS_KEY]);
   console.log('[Background] Cached data cleared');
+}
+
+async function cleanupOldSentWords() {
+  // Clean up old sent words to prevent memory bloat
+  // Keep only words from the last 1000 entries
+  const sentWords = await getSentWords();
+  if (sentWords.length > 1000) {
+    const recentWords = sentWords.slice(-1000);
+    await setSentWords(recentWords);
+    console.log(`[Background] Cleaned up old sent words, kept ${recentWords.length} recent entries`);
+  }
 }
 
 async function ensureCheckSocket() {
@@ -66,6 +94,21 @@ async function ensureCheckSocket() {
       try {
         const msg = JSON.parse(ev.data);
         console.log('[Background] Check WebSocket message:', msg);
+        
+        // Handle fact-check results
+        if (msg.type === 'fact_check_result') {
+          console.log('[Background] 📊 FACT_CHECK_RESULT received:', msg);
+          
+          // Send result to content script for display
+          chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+            if (tabs[0]) {
+              chrome.tabs.sendMessage(tabs[0].id, {
+                type: 'fact_check_result',
+                data: msg
+              });
+            }
+          });
+        }
       } catch (e) {
         console.log('[Background] Non-JSON check message:', ev.data);
       }
@@ -87,14 +130,47 @@ async function ensureCheckSocket() {
 async function enqueue(items) {
   if (!items || !items.length) return;
   console.log(`[Background] Enqueuing ${items.length} items`);
-  const [meta, outbox] = await Promise.all([getMeta(), getOutbox()]);
+  
+  const [meta, outbox, sentWords] = await Promise.all([getMeta(), getOutbox(), getSentWords()]);
   let { nextSeq, sessionId } = meta;
-  const enriched = items.map((msg) => ({ ...msg, seq: nextSeq++, sessionId }));
+  
+  // Filter out duplicate words
+  const uniqueItems = [];
+  const newSentWords = new Set(sentWords);
+  
+  for (const msg of items) {
+    if (msg.type === 'word.create' && msg.word?.text) {
+      const wordKey = `${sessionId}-${msg.source?.lineId}-${msg.word.text}-${msg.word.indexInLine}`;
+      if (!newSentWords.has(wordKey)) {
+        newSentWords.add(wordKey);
+        uniqueItems.push(msg);
+      } else {
+        console.log(`[Background] Skipping duplicate word: "${msg.word.text}"`);
+      }
+    } else {
+      // Non-word items (transcript events) are always added
+      uniqueItems.push(msg);
+    }
+  }
+  
+  if (uniqueItems.length === 0) {
+    console.log(`[Background] All items were duplicates, nothing to enqueue`);
+    return;
+  }
+  
+  const enriched = uniqueItems.map((msg) => ({ ...msg, seq: nextSeq++, sessionId }));
   await Promise.all([
     setMeta({ nextSeq }),
-    setOutbox(outbox.concat(enriched))
+    setOutbox(outbox.concat(enriched)),
+    setSentWords(newSentWords)
   ]);
-  console.log(`[Background] Queue now has ${outbox.length + enriched.length} items`);
+  console.log(`[Background] Queue now has ${outbox.length + enriched.length} items (${items.length - uniqueItems.length} duplicates filtered)`);
+  
+  // Periodically clean up old sent words
+  if (Math.random() < 0.1) { // 10% chance to cleanup
+    cleanupOldSentWords();
+  }
+  
   scheduleSend();
 }
 
@@ -117,27 +193,39 @@ async function flushOutbox() {
 
   console.log(`[Background] Processing ${outbox.length} items from outbox`);
   
-  // Send individual words to both endpoints
+  // Send batch to append endpoint (main server expects batch format)
   const batch = outbox.slice(0, BATCH_SIZE);
   try {
-    for (const item of batch) {
-      // Extract the word text from the item structure
+    // Send batch to append endpoint
+    // if (websocket && websocket.readyState === WebSocket.OPEN) {
+    //   const batchMessage = { type: 'batch', items: batch };
+    //   websocket.send(JSON.stringify(batchMessage));
+    //   console.log(`[Background] ✅ Sent batch of ${batch.length} items to append endpoint`);
+    // } else {
+    //   console.log(`[Background] ❌ Append WebSocket not ready (state: ${websocket?.readyState})`);
+    // }
+    
+    // Send individual words to check endpoint (for real-time checking)
+    // Process words sequentially to maintain order
+    for (let i = 0; i < batch.length; i++) {
+      const item = batch[i];
       const wordText = item.word?.text || item.data?.word?.text || 'unknown';
       
-      console.log(`[Background] Processing word: "${wordText}"`);
-      
-      // Send to append endpoint
-      if (websocket && websocket.readyState === WebSocket.OPEN) {
-        websocket.send(JSON.stringify({ word: wordText }));
-        console.log(`[Background] ✅ Sent word to append: "${wordText}"`);
-      } else {
-        console.log(`[Background] ❌ Append WebSocket not ready (state: ${websocket?.readyState})`);
-      }
-      
-      // Send to check endpoint
       if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
-        wsCheck.send(JSON.stringify({ word: wordText }));
-        console.log(`[Background] ✅ Sent word to check: "${wordText}"`);
+        const checkMessage = { word: wordText };
+        wsCheck.send(JSON.stringify(checkMessage));
+        console.log(`[Background] ✅ Sent word ${i + 1}/${batch.length} to check: "${wordText}"`);
+        console.log(`[Background] 📤 CHECK_WS_SEND:`, {
+          message: checkMessage
+        });
+        
+        // Remove this item from the queue after sending
+        await removeItemFromQueue(item.seq);
+        
+        // Small delay to ensure proper sequencing
+        if (i < batch.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
       } else {
         console.log(`[Background] ❌ Check WebSocket not ready (state: ${wsCheck?.readyState})`);
       }
@@ -149,20 +237,29 @@ async function flushOutbox() {
     return;
   }
 
-  // Optimistic resend policy: keep items until acked
-  // Schedule next send if more remain
-  if (outbox.length > BATCH_SIZE) scheduleSend();
+  // Items are now removed after sending to check endpoint
+  // No need to reschedule since items are removed individually
 }
 
 async function handleAck(ackSeq) {
   if (typeof ackSeq !== "number") return;
   const [meta, outbox] = await Promise.all([getMeta(), getOutbox()]);
+  
+  // Remove all items with seq <= ackSeq (acknowledged items)
   const trimmed = outbox.filter((item) => item.seq > ackSeq);
+  const removedCount = outbox.length - trimmed.length;
+  
   await Promise.all([
     setMeta({ lastAckSeq: Math.max(meta.lastAckSeq, ackSeq) }),
     setOutbox(trimmed)
   ]);
-  if (trimmed.length) scheduleSend();
+  
+  console.log(`[Background] Acknowledged ${removedCount} items up to seq ${ackSeq}, ${trimmed.length} items remaining`);
+  
+  // Schedule next send if more items remain
+  if (trimmed.length > 0) {
+    scheduleSend();
+  }
 }
 
 async function ensureSocket() {

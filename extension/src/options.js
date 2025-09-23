@@ -2,8 +2,8 @@ const META_KEY = "transportMeta";
 
 async function load() {
   // URLs are hardcoded in the extension
-  document.getElementById('wsAppendUrl').value = "wss://07ca0616485e.ngrok-free.app/ws/append";
-  document.getElementById('wsCheckUrl').value = "wss://07ca0616485e.ngrok-free.app/ws/check";
+  document.getElementById('wsAppendUrl').value = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/append";
+  document.getElementById('wsCheckUrl').value = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/check";
 }
 
 async function save() {
