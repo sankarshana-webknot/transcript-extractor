@@ -1,8 +1,8 @@
 /* Background service worker: maintains outbound WebSocket with acks, retries, and buffering. */
 
-// Configuration constants
-const APPEND_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/append";
-const CHECK_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/check";
+// Configuration constants - these will be set from config
+let APPEND_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/append";
+let CHECK_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/check";
 const BATCH_SIZE = 50;
 const SEND_INTERVAL = 500;
 const MAX_RECONNECT_DELAY = 30000;
@@ -11,12 +11,29 @@ const RECONNECT_DELAY_BASE = 1000;
 const OUTBOX_KEY = "outboxQueue";
 const META_KEY = "transportMeta"; // { nextSeq, lastAckSeq, wsUrl, sessionId }
 const SENT_WORDS_KEY = "sentWords"; // Track sent words to prevent duplicates
+const CONFIG_KEY = "extensionConfig"; // Store extension configuration
 
 let websocket = null;
 let wsCheck = null;
 let isConnecting = false;
 let reconnectAttempt = 0;
 let sendTimer = null;
+
+// Load configuration from storage
+async function loadConfig() {
+  try {
+    const { [CONFIG_KEY]: config } = await chrome.storage.local.get(CONFIG_KEY);
+    if (config && config.wsBaseUrl) {
+      APPEND_URL = `${config.wsBaseUrl}/ws/append`;
+      CHECK_URL = `${config.wsBaseUrl}/ws/check`;
+      console.log('[Background] Configuration loaded:', { APPEND_URL, CHECK_URL });
+    } else {
+      console.log('[Background] Using default configuration');
+    }
+  } catch (error) {
+    console.error('[Background] Error loading configuration:', error);
+  }
+}
 
 async function getMeta() {
   const { [META_KEY]: meta } = await chrome.storage.local.get(META_KEY);
@@ -197,13 +214,13 @@ async function flushOutbox() {
   const batch = outbox.slice(0, BATCH_SIZE);
   try {
     // Send batch to append endpoint
-    // if (websocket && websocket.readyState === WebSocket.OPEN) {
-    //   const batchMessage = { type: 'batch', items: batch };
-    //   websocket.send(JSON.stringify(batchMessage));
-    //   console.log(`[Background] ✅ Sent batch of ${batch.length} items to append endpoint`);
-    // } else {
-    //   console.log(`[Background] ❌ Append WebSocket not ready (state: ${websocket?.readyState})`);
-    // }
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      const batchMessage = { type: 'batch', items: batch };
+      websocket.send(JSON.stringify(batchMessage));
+      console.log(`[Background] ✅ Sent batch of ${batch.length} items to append endpoint`);
+    } else {
+      console.log(`[Background] ❌ Append WebSocket not ready (state: ${websocket?.readyState})`);
+    }
     
     // Send individual words to check endpoint (for real-time checking)
     // Process words sequentially to maintain order
@@ -319,15 +336,19 @@ async function ensureSocket() {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+chrome.runtime.onMessage.addListener(async (message, _sender, _sendResponse) => {
   console.log('[Background] Received message:', message);
   
   if (!message || !message.type) return;
 
   switch (message.type) {
     case "config.update": {
-      console.log('[Background] Config update received - URLs are hardcoded');
-      // URLs are hardcoded, no need to update them
+      console.log('[Background] Config update received:', message);
+      if (message.wsBaseUrl) {
+        await chrome.storage.local.set({ [CONFIG_KEY]: { wsBaseUrl: message.wsBaseUrl } });
+        await loadConfig();
+        console.log('[Background] Configuration updated:', { APPEND_URL, CHECK_URL });
+      }
       break;
     }
     case "word.single": {
@@ -400,6 +421,8 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
 
 // Kick off both sockets on startup
 console.log('[Background] Extension starting up...');
-console.log('[Background] Append URL:', APPEND_URL);
-console.log('[Background] Check URL:', CHECK_URL);
-ensureSocket();
+loadConfig().then(() => {
+  console.log('[Background] Append URL:', APPEND_URL);
+  console.log('[Background] Check URL:', CHECK_URL);
+  ensureSocket();
+});

@@ -14,16 +14,20 @@
   </head>
   <body>
     <div class="row">
-      <h2>Transcript Extractor - Dual Endpoint</h2>
-      <label for="wsAppendUrl">Append Endpoint URL (Hardcoded)</label>
+      <h2>Transcript Extractor - Configuration</h2>
+      <label for="wsBaseUrl">WebSocket Base URL</label>
+      <input id="wsBaseUrl" type="text" placeholder="wss://example.com" />
+      <div class="hint">Base WebSocket URL. Append and Check endpoints will be derived from this.</div>
+      
+      <label for="wsAppendUrl">Append Endpoint URL (Derived)</label>
       <input id="wsAppendUrl" type="text" readonly />
-      <div class="hint">WebSocket URL for sending transcript words to append endpoint.</div>
+      <div class="hint">WebSocket URL for sending transcript batches to append endpoint.</div>
       
-      <label for="wsCheckUrl">Check Endpoint URL (Hardcoded)</label>
+      <label for="wsCheckUrl">Check Endpoint URL (Derived)</label>
       <input id="wsCheckUrl" type="text" readonly />
-      <div class="hint">WebSocket URL for sending transcript words to check endpoint.</div>
+      <div class="hint">WebSocket URL for sending individual words to check endpoint.</div>
       
-      <button id="save" disabled>URLs are hardcoded</button>
+      <button id="save">Save Configuration</button>
     </div>
     <script src="options.js"></script>
   </body>
