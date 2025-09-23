@@ -1,15 +1,14 @@
 const META_KEY = "transportMeta";
 
 async function load() {
-  const { [META_KEY]: meta } = await chrome.storage.local.get(META_KEY);
-  const wsUrl = meta?.wsUrl || "ws://localhost:8080";
-  document.getElementById('wsUrl').value = wsUrl;
+  // URLs are hardcoded in the extension
+  document.getElementById('wsAppendUrl').value = "wss://07ca0616485e.ngrok-free.app/ws/append";
+  document.getElementById('wsCheckUrl').value = "wss://07ca0616485e.ngrok-free.app/ws/check";
 }
 
 async function save() {
-  const wsUrl = document.getElementById('wsUrl').value.trim();
-  await chrome.storage.local.set({ [META_KEY]: { ...(await getMeta()), wsUrl } });
-  chrome.runtime.sendMessage({ type: 'config.update', wsUrl });
+  // URLs are hardcoded, no need to save them
+  console.log('URLs are hardcoded in the extension');
 }
 
 async function getMeta() {
@@ -17,8 +16,7 @@ async function getMeta() {
   return (
     meta || {
       nextSeq: 1,
-      lastAckSeq: 0,
-      wsUrl: "ws://localhost:8080"
+      lastAckSeq: 0
     }
   );
 }

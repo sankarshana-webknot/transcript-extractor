@@ -48,7 +48,7 @@ wss.on('connection', (ws) => {
           console.log(`[${s}] - ${timestamp}, ${lineNumber}: ${w.text}`);
         } else if (item.type === 'transcript.start') {
           console.log(`[${s}] *** NEW TRANSCRIPT STARTED *** at ${new Date(item.timestampMs).toISOString()}`);
-          console.log(`[${s}] First line: ${item.lineNumber} - ${item.timestamp}`);
+          console.log(`[${s}] - ${item.lineNumber} - ${item.timestamp}`);
         } else if (item.type === 'transcript.resume') {
           console.log(`[${s}] Transcript session RESUMED at ${new Date(item.timestampMs).toISOString()}`);
         } else if (item.type === 'transcript.pause') {

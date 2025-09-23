@@ -14,11 +14,16 @@
   </head>
   <body>
     <div class="row">
-      <h2>Transcript Extractor</h2>
-      <label for="wsUrl">WebSocket server URL</label>
-      <input id="wsUrl" type="text" placeholder="ws://localhost:8080" />
-      <div class="hint">Updates take effect immediately.</div>
-      <button id="save">Save</button>
+      <h2>Transcript Extractor - Dual Endpoint</h2>
+      <label for="wsAppendUrl">Append Endpoint URL (Hardcoded)</label>
+      <input id="wsAppendUrl" type="text" readonly />
+      <div class="hint">WebSocket URL for sending transcript words to append endpoint.</div>
+      
+      <label for="wsCheckUrl">Check Endpoint URL (Hardcoded)</label>
+      <input id="wsCheckUrl" type="text" readonly />
+      <div class="hint">WebSocket URL for sending transcript words to check endpoint.</div>
+      
+      <button id="save" disabled>URLs are hardcoded</button>
     </div>
     <script src="options.js"></script>
   </body>

@@ -3,7 +3,7 @@
 const SOURCE_URL = location.href;
 
 // Configuration constants
-const TRANSCRIPT_END_TIMEOUT = 5000; // 5 seconds of no new rows = transcript ended
+// Note: Transcripts now only end when page is closed, not on timeout
 
 let lineCounter = 0;
 const finalizedNodeSet = new WeakSet();
@@ -84,19 +84,30 @@ function buildWordEventsFromLine(rowDetails, lineIndex) {
   if (!transcriptText) return [];
   
   const words = tokenizeWithOffsets(transcriptText);
-  return words.map((w) => ({
-    type: 'word.create',
-    source: {
-      url: SOURCE_URL,
-      lineId: `ln-${lineIndex}`,
-      lineRevision: 1,
-      lineIndex,
-      timestamp,
-      lineNumber
-    },
-    word: w,
-    timestampMs: Date.now()
-  }));
+  
+  // Send each word individually with a delay
+  words.forEach((w, wordIndex) => {
+    setTimeout(() => {
+      const wordEvent = {
+        type: 'word.create',
+        source: {
+          url: SOURCE_URL,
+          lineId: `ln-${lineIndex}`,
+          lineRevision: 1,
+          lineIndex,
+          timestamp,
+          lineNumber
+        },
+        word: w,
+        timestampMs: Date.now()
+      };
+      
+      console.log('[Content] Sending word to background:', w.text);
+      chrome.runtime.sendMessage({ type: 'word.single', item: wordEvent });
+    }, wordIndex * 500); // 500ms delay between each word
+  });
+  
+  return []; // Return empty array since we're sending words individually
 }
 
 function maybeFinalizePreviousLine(container, newChild) {
@@ -112,17 +123,17 @@ function maybeFinalizePreviousLine(container, newChild) {
   const rows = Array.from(container.querySelectorAll('.div-row'));
   console.log('[Transcript Extractor] Found', rows.length, 'total .div-row elements');
   
-  // Wait for at least 2 rows before starting to process
-  if (rows.length < 2) {
-    console.log('[Transcript Extractor] Not enough rows yet (need at least 2)');
+  // Wait for at least 3 rows before starting to process
+  if (rows.length < 3) {
+    console.log('[Transcript Extractor] Not enough rows yet (need at least 3)');
     return;
   }
   
-  // When 3rd row is added, process 1st row
   // When 4th row is added, process 2nd row
   // When 5th row is added, process 3rd row
+  // When 6th row is added, process 4th row
   // etc.
-  const rowToProcess = rows.length - 2; // This gives us the row to process (changed from n-3 to n-2)
+  const rowToProcess = rows.length - 3; // This gives us the n-2th row (changed from n-1 to n-2)
   
   if (rowToProcess >= 0) {
     const finalized = rows[rowToProcess];
@@ -144,11 +155,8 @@ function maybeFinalizePreviousLine(container, newChild) {
     // No need to check for "1-1" here anymore
 
     const currentLineIndex = ++lineCounter;
-    const items = buildWordEventsFromLine(rowDetails, currentLineIndex);
-    
-    if (items.length) {
-      chrome.runtime.sendMessage({ type: 'word.batch', items });
-    }
+    buildWordEventsFromLine(rowDetails, currentLineIndex);
+    // Note: buildWordEventsFromLine now sends words individually with delays
     finalizedNodeSet.add(finalized);
   }
   
@@ -198,22 +206,52 @@ function resetTranscriptEndTimer() {
     clearTimeout(transcriptEndTimer);
   }
   
-  // Set new timer
-  transcriptEndTimer = setTimeout(() => {
-    console.log('[Transcript Extractor] Transcript appears to have ended (no new rows for', TRANSCRIPT_END_TIMEOUT, 'ms)');
+  // Don't set a timer - transcript only ends when page is closed
+  // This prevents premature transcript end detection
+}
+
+function handlePageLoad() {
+  console.log('[Transcript Extractor] Page loaded - starting new transcript session');
+  
+  // Clear any existing timer to prevent old timers from firing
+  if (transcriptEndTimer) {
+    clearTimeout(transcriptEndTimer);
+    transcriptEndTimer = null;
+    console.log('[Transcript Extractor] Cleared existing timer');
+  }
+  
+  // Generate new session ID for page load
+  const newSessionId = `cvn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  currentSessionId = newSessionId;
+  
+  // Reset counters for new transcript
+  lineCounter = 0;
+  finalizedNodeSet = new WeakSet();
+  
+  // Send new transcript start event for page load
+  chrome.runtime.sendMessage({
+    type: 'transcript.start',
+    sessionId: currentSessionId,
+    timestamp: new Date().toLocaleTimeString(),
+    lineNumber: '1-1',
+    timestampMs: Date.now()
+  });
+  
+  console.log('[Transcript Extractor] New transcript session started on page load:', currentSessionId);
+}
+
+function handlePageClose() {
+  console.log('[Transcript Extractor] Page is closing - ending transcript');
     
     // Send transcript end event
     chrome.runtime.sendMessage({ 
       type: 'transcript.end', 
-      sessionId: currentSessionId,
+    sessionId: currentSessionId,
       totalLines: lineCounter,
       timestampMs: Date.now()
     });
     
-    // Reset counters for next transcript
-    lineCounter = 0;
-    finalizedNodeSet = new WeakSet();
-  }, TRANSCRIPT_END_TIMEOUT);
+  console.log('[Transcript Extractor] Transcript ended due to page close');
 }
 
 function handleNewTranscriptStart(rowDetails) {
@@ -274,18 +312,11 @@ function detectNewTranscriptBySessionId() {
 
 function resumeTranscriptSession() {
   console.log('[Transcript Extractor] Resuming transcript processing');
-  isTranscriptActive = true;
   
-  // Use session ID detection to determine if this is a new transcript
-  const sessionId = detectNewTranscriptBySessionId();
-  
-  // If we got a new session ID, this is a new transcript
-  if (sessionId !== currentSessionId) {
-    console.log('[Transcript Extractor] *** NEW TRANSCRIPT DETECTED BY SESSION ID ***');
-    currentSessionId = sessionId;
-    lineCounter = 0;
-    finalizedNodeSet = new WeakSet();
-    
+  // If we just loaded the page and haven't started processing yet, this should be a new transcript start
+  if (!isTranscriptActive && currentSessionId) {
+    console.log('[Transcript Extractor] *** NEW TRANSCRIPT DETECTED ON RESUME ***');
+    isTranscriptActive = true;
     // Send new transcript start event
     chrome.runtime.sendMessage({
       type: 'transcript.start',
@@ -295,12 +326,33 @@ function resumeTranscriptSession() {
       timestampMs: Date.now()
     });
   } else {
-    // Send resume event for existing session
-    chrome.runtime.sendMessage({
-      type: 'transcript.resume',
-      sessionId: currentSessionId,
-      timestampMs: Date.now()
-    });
+    isTranscriptActive = true;
+    // Use session ID detection to determine if this is a new transcript
+    const sessionId = detectNewTranscriptBySessionId();
+    
+    // If we got a new session ID, this is a new transcript
+    if (sessionId !== currentSessionId) {
+      console.log('[Transcript Extractor] *** NEW TRANSCRIPT DETECTED BY SESSION ID ***');
+      currentSessionId = sessionId;
+      lineCounter = 0;
+      finalizedNodeSet = new WeakSet();
+      
+      // Send new transcript start event
+      chrome.runtime.sendMessage({
+        type: 'transcript.start',
+        sessionId: currentSessionId,
+        timestamp: new Date().toLocaleTimeString(),
+        lineNumber: '1-1',
+        timestampMs: Date.now()
+      });
+    } else {
+      // Send resume event for existing session
+      chrome.runtime.sendMessage({
+        type: 'transcript.resume',
+        sessionId: currentSessionId,
+        timestampMs: Date.now()
+      });
+    }
   }
   
   console.log('[Transcript Extractor] Transcript processing resumed for session:', currentSessionId);
@@ -382,10 +434,10 @@ function processExistingRows(container) {
   console.log('[Transcript Extractor] Found', rows.length, 'existing .div-row elements');
   
   
-  // Only process if we have at least 2 rows (so we can process the 1st one)
-  if (rows.length >= 2) {
-    // Process rows following the sliding window pattern
-    for (let i = 0; i <= rows.length - 2; i++) {
+  // Only process if we have at least 3 rows (so we can process the 1st one when we have 3)
+  if (rows.length >= 3) {
+    // Process rows following the sliding window pattern (n-2)
+    for (let i = 0; i <= rows.length - 3; i++) {
       const finalized = rows[i];
       
       if (finalizedNodeSet.has(finalized)) continue;
@@ -397,12 +449,8 @@ function processExistingRows(container) {
       // No need to check for "1-1" here anymore
 
       const currentLineIndex = ++lineCounter;
-      const items = buildWordEventsFromLine(rowDetails, currentLineIndex);
-      
-      if (items.length) {
-        console.log('[Transcript Extractor] Processing existing row', i, 'with', items.length, 'words');
-        chrome.runtime.sendMessage({ type: 'word.batch', items });
-      }
+      buildWordEventsFromLine(rowDetails, currentLineIndex);
+      // Note: buildWordEventsFromLine now sends words individually with delays
       finalizedNodeSet.add(finalized);
     }
     
@@ -453,6 +501,13 @@ function bootstrap() {
   
   attachObserver(transcriptContainer);
   console.log('[Transcript Extractor] Observer attached');
+  
+  // Add page close event listener
+  window.addEventListener('beforeunload', handlePageClose);
+  console.log('[Transcript Extractor] Page close listener attached');
+  
+  // Send transcript start event for page load
+  handlePageLoad();
 }
 
 if (document.readyState === 'loading') {

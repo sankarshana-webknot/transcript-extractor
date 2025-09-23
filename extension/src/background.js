@@ -1,7 +1,8 @@
 /* Background service worker: maintains outbound WebSocket with acks, retries, and buffering. */
 
-// Configuration constants (would normally come from config file)
-const DEFAULT_WS_URL = "ws://localhost:8080";
+// Configuration constants
+const APPEND_URL = "wss://07ca0616485e.ngrok-free.app/ws/append";
+const CHECK_URL = "wss://07ca0616485e.ngrok-free.app/ws/check";
 const BATCH_SIZE = 50;
 const SEND_INTERVAL = 50;
 const MAX_RECONNECT_DELAY = 30000;
@@ -11,6 +12,7 @@ const OUTBOX_KEY = "outboxQueue";
 const META_KEY = "transportMeta"; // { nextSeq, lastAckSeq, wsUrl, sessionId }
 
 let websocket = null;
+let wsCheck = null;
 let isConnecting = false;
 let reconnectAttempt = 0;
 let sendTimer = null;
@@ -21,7 +23,6 @@ async function getMeta() {
     meta || {
       nextSeq: 1,
       lastAckSeq: 0,
-      wsUrl: DEFAULT_WS_URL,
       sessionId: `cvn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     }
   );
@@ -49,8 +50,43 @@ async function clearCachedData() {
   console.log('[Background] Cached data cleared');
 }
 
+async function ensureCheckSocket() {
+  if (wsCheck && wsCheck.readyState === WebSocket.OPEN) return;
+  
+  console.log('[Background] Connecting to check endpoint:', CHECK_URL);
+  
+  try {
+    wsCheck = new WebSocket(CHECK_URL);
+    
+    wsCheck.addEventListener("open", () => {
+      console.log('[Background] Check WebSocket connected');
+    });
+    
+    wsCheck.addEventListener("message", (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        console.log('[Background] Check WebSocket message:', msg);
+      } catch (e) {
+        console.log('[Background] Non-JSON check message:', ev.data);
+      }
+    });
+    
+    wsCheck.addEventListener("close", (ev) => {
+      console.log('[Background] Check WebSocket closed:', ev.code, ev.reason);
+      wsCheck = null;
+    });
+    
+    wsCheck.addEventListener("error", (err) => {
+      console.error('[Background] Check WebSocket error:', err);
+    });
+  } catch (e) {
+    console.error('[Background] Failed to create check WebSocket:', e);
+  }
+}
+
 async function enqueue(items) {
   if (!items || !items.length) return;
+  console.log(`[Background] Enqueuing ${items.length} items`);
   const [meta, outbox] = await Promise.all([getMeta(), getOutbox()]);
   let { nextSeq, sessionId } = meta;
   const enriched = items.map((msg) => ({ ...msg, seq: nextSeq++, sessionId }));
@@ -58,6 +94,7 @@ async function enqueue(items) {
     setMeta({ nextSeq }),
     setOutbox(outbox.concat(enriched))
   ]);
+  console.log(`[Background] Queue now has ${outbox.length + enriched.length} items`);
   scheduleSend();
 }
 
@@ -71,16 +108,40 @@ function scheduleSend() {
 
 async function flushOutbox() {
   if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+    console.log('[Background] WebSocket not ready, ensuring connection...');
     await ensureSocket();
     return;
   }
   const outbox = await getOutbox();
   if (outbox.length === 0) return;
 
-  // Micro-batch: send up to N at a time to avoid flooding
+  console.log(`[Background] Processing ${outbox.length} items from outbox`);
+  
+  // Send individual words to both endpoints
   const batch = outbox.slice(0, BATCH_SIZE);
   try {
-    websocket.send(JSON.stringify({ type: "batch", items: batch }));
+    for (const item of batch) {
+      // Extract the word text from the item structure
+      const wordText = item.word?.text || item.data?.word?.text || 'unknown';
+      
+      console.log(`[Background] Processing word: "${wordText}"`);
+      
+      // Send to append endpoint
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(JSON.stringify({ word: wordText }));
+        console.log(`[Background] ✅ Sent word to append: "${wordText}"`);
+      } else {
+        console.log(`[Background] ❌ Append WebSocket not ready (state: ${websocket?.readyState})`);
+      }
+      
+      // Send to check endpoint
+      if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
+        wsCheck.send(JSON.stringify({ word: wordText }));
+        console.log(`[Background] ✅ Sent word to check: "${wordText}"`);
+      } else {
+        console.log(`[Background] ❌ Check WebSocket not ready (state: ${wsCheck?.readyState})`);
+      }
+    }
   } catch (err) {
     console.error("WebSocket send error", err);
     // Will reconnect on close; keep items in queue
@@ -108,21 +169,24 @@ async function ensureSocket() {
   if (websocket && websocket.readyState === WebSocket.OPEN) return;
   if (isConnecting) return;
   isConnecting = true;
-  const { wsUrl, sessionId } = await getMeta();
+  const { sessionId } = await getMeta();
+  
+  console.log('[Background] Connecting to append endpoint:', APPEND_URL);
 
   try {
-    websocket = new WebSocket(wsUrl);
+    websocket = new WebSocket(APPEND_URL);
 
     websocket.addEventListener("open", async () => {
       isConnecting = false;
       reconnectAttempt = 0;
       
       // Clear cached data on server restart/reconnect
-      console.log('[Background] WebSocket connected - clearing cached data');
+      console.log('[Background] Append WebSocket connected - clearing cached data');
       await clearCachedData();
       
-      // Identify session on connect
-      websocket.send(JSON.stringify({ type: "hello", sessionId }));
+      // Start check socket
+      await ensureCheckSocket();
+      
       scheduleSend();
     });
 
@@ -137,15 +201,17 @@ async function ensureSocket() {
       }
     });
 
-    websocket.addEventListener("close", () => {
+    websocket.addEventListener("close", (ev) => {
       isConnecting = false;
       websocket = null;
+      console.log('[Background] Append WebSocket closed:', ev.code, ev.reason);
       const delay = Math.min(RECONNECT_DELAY_BASE * 2 ** reconnectAttempt, MAX_RECONNECT_DELAY);
       reconnectAttempt += 1;
       setTimeout(() => ensureSocket(), delay);
     });
 
-    websocket.addEventListener("error", () => {
+    websocket.addEventListener("error", (err) => {
+      console.error('[Background] Append WebSocket error:', err);
       // close triggers reconnect
     });
   } catch (e) {
@@ -163,15 +229,14 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
 
   switch (message.type) {
     case "config.update": {
-      const { wsUrl } = message;
-      console.log('[Background] Updating WebSocket URL to:', wsUrl);
-      setMeta({ wsUrl }).then(() => {
-        if (websocket) {
-          try { websocket.close(); } catch {}
-        } else {
-          ensureSocket();
-        }
-      });
+      console.log('[Background] Config update received - URLs are hardcoded');
+      // URLs are hardcoded, no need to update them
+      break;
+    }
+    case "word.single": {
+      // Handle individual word events with delays
+      console.log('[Background] Received word.single message:', message.item);
+      enqueue([message.item]);
       break;
     }
     case "word.batch": {
@@ -236,7 +301,8 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
   }
 });
 
-// Kick off socket on startup
+// Kick off both sockets on startup
+console.log('[Background] Extension starting up...');
+console.log('[Background] Append URL:', APPEND_URL);
+console.log('[Background] Check URL:', CHECK_URL);
 ensureSocket();
-
-
