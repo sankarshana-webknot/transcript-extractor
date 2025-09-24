@@ -543,6 +543,32 @@ function pauseTranscriptSession() {
   console.log('[Transcript Extractor] Transcript processing paused for session:', currentSessionId);
 }
 
+function autoClickTryDemo() {
+  // Look for the "Try Demo" link
+  const tryDemoLink = document.querySelector('a[href="#"][onclick*="startDemo"]');
+  if (tryDemoLink) {
+    const tryDemoText = tryDemoLink.querySelector('p');
+    if (tryDemoText && tryDemoText.textContent.trim() === 'Try Demo') {
+      console.log('[Transcript Extractor] Found "Try Demo" link, auto-clicking...');
+      tryDemoLink.click();
+      return true;
+    }
+  }
+  
+  // Alternative: look for any link containing "Try Demo" text
+  const links = document.querySelectorAll('a');
+  for (const link of links) {
+    if (link.textContent.trim() === 'Try Demo' && link.onclick && link.onclick.toString().includes('startDemo')) {
+      console.log('[Transcript Extractor] Found "Try Demo" link by text, auto-clicking...');
+      link.click();
+      return true;
+    }
+  }
+  
+  console.log('[Transcript Extractor] "Try Demo" link not found');
+  return false;
+}
+
 function monitorConnectButton() {
   const button = document.getElementById('buttonConnect');
   if (!button) {
@@ -553,6 +579,12 @@ function monitorConnectButton() {
   
   console.log('[Transcript Extractor] Monitoring connect button by ID:', button.id);
   console.log('[Transcript Extractor] Initial button state:', button.textContent.trim());
+  
+  // Auto-click the button after 2 seconds to ensure proper state transition
+  setTimeout(() => {
+    console.log('[Transcript Extractor] Auto-clicking connect button');
+    button.click();
+  }, 0);
   
   // Create observer for button changes (text, classes, attributes)
   buttonObserver = new MutationObserver((mutations) => {
@@ -670,6 +702,71 @@ function createFactCheckResultsBox() {
     
     .toggle-btn:hover {
       background: #0056b3;
+    }
+    
+    .case-controls {
+      padding: 12px 16px;
+      border-bottom: 1px solid #ddd;
+      background: #f8f9fa;
+    }
+    
+    .case-controls-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    
+    .case-dropdown {
+      flex: 1;
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+      background: white;
+      max-width: 250px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .case-dropdown option {
+      padding: 4px 8px;
+      white-space: normal;
+      word-wrap: break-word;
+      max-width: 100%;
+    }
+    
+    .control-btn {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    
+    .start-btn {
+      background: #28a745;
+      color: white;
+    }
+    
+    .start-btn:hover {
+      background: #218838;
+    }
+    
+    .stop-btn {
+      background: #dc3545;
+      color: white;
+    }
+    
+    .stop-btn:hover {
+      background: #c82333;
+    }
+    
+    .stop-btn:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
     }
     
     .fact-check-content {
@@ -797,6 +894,20 @@ function createFactCheckResultsBox() {
       <h3>🔍 Fact Check Results</h3>
       <button id="toggle-fact-check" class="toggle-btn">−</button>
     </div>
+    <div class="case-controls">
+      <div class="case-controls-row">
+        <select id="case-dropdown" class="case-dropdown">
+          <option value="">Select a case...</option>
+          <option value="case-001">Case 001 - Financial Planning Fraud - Doe vs. Tricor Advisors</option>
+          <option value="case-002">Case 002 - Corporate Espionage - Tricor Industries vs. Apex Corp.</option>
+          <option value="case-003">Case 003 - Wrongful Termination - Dooley vs. Tricor Industries</option>
+          <option value="case-004">Case 004 - Investment Mismanagement - Client Group vs. Financial Planners Inc.</option>
+          <option value="case-005">Case 005 - Contract Dispute - Global Ventures vs. Tricor Industries</option>
+        </select>
+        <button id="start-case-btn" class="control-btn start-btn">Start</button>
+        <button id="stop-case-btn" class="control-btn stop-btn" disabled>Stop</button>
+      </div>
+    </div>
     <div class="fact-check-content" id="fact-check-content">
       <div class="no-results">No fact-check results yet...</div>
     </div>
@@ -817,6 +928,64 @@ function createFactCheckResultsBox() {
       content.style.display = 'none';
       toggleBtn.textContent = '+';
     }
+  });
+  
+  // Add case control functionality
+  const caseDropdown = factCheckResultsBox.querySelector('#case-dropdown');
+  const startBtn = factCheckResultsBox.querySelector('#start-case-btn');
+  const stopBtn = factCheckResultsBox.querySelector('#stop-case-btn');
+  
+  // Enable/disable start button based on selection
+  caseDropdown.addEventListener('change', () => {
+    const hasSelection = caseDropdown.value !== '';
+    startBtn.disabled = !hasSelection;
+    if (!hasSelection) {
+      stopBtn.disabled = true;
+    }
+  });
+  
+  // Start button functionality
+  startBtn.addEventListener('click', () => {
+    const selectedCase = caseDropdown.value;
+    if (selectedCase) {
+      console.log('[Transcript Extractor] Starting case:', selectedCase);
+      
+      // Auto-click connect button if it shows "Connect"
+      const connectButton = document.getElementById('buttonConnect');
+      if (connectButton && connectButton.textContent.trim().toLowerCase() === 'connect') {
+        console.log('[Transcript Extractor] Auto-clicking Connect button to start transcript');
+        connectButton.click();
+      } else if (connectButton) {
+        console.log('[Transcript Extractor] Connect button state:', connectButton.textContent.trim(), '- no action needed');
+      } else {
+        console.log('[Transcript Extractor] Connect button not found');
+      }
+      
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      caseDropdown.disabled = true;
+    }
+  });
+  
+  // Stop button functionality
+  stopBtn.addEventListener('click', () => {
+    const selectedCase = caseDropdown.value;
+    console.log('[Transcript Extractor] Stopping case:', selectedCase);
+    
+    // Auto-click connect button if it shows "Disconnect"
+    const connectButton = document.getElementById('buttonConnect');
+    if (connectButton && connectButton.textContent.trim().toLowerCase() === 'disconnect') {
+      console.log('[Transcript Extractor] Auto-clicking Disconnect button to stop transcript');
+      connectButton.click();
+    } else if (connectButton) {
+      console.log('[Transcript Extractor] Connect button state:', connectButton.textContent.trim(), '- no action needed');
+    } else {
+      console.log('[Transcript Extractor] Connect button not found');
+    }
+    
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    caseDropdown.disabled = false;
   });
   
   console.log('[Transcript Extractor] Fact-check results box created');
@@ -909,6 +1078,9 @@ function bootstrap() {
   
   // Create fact-check results box
   createFactCheckResultsBox();
+  
+  // Auto-click "Try Demo" if present (before transcript processing begins)
+  autoClickTryDemo();
   
   // Start monitoring the connect button
   monitorConnectButton();
