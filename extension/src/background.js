@@ -4,7 +4,7 @@
 let APPEND_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/append";
 let CHECK_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/check";
 const BATCH_SIZE = 50;
-const SEND_INTERVAL = 500;
+const SEND_INTERVAL = 100; // Reduced from 500ms to 50ms
 const MAX_RECONNECT_DELAY = 30000;
 const RECONNECT_DELAY_BASE = 1000;
 
@@ -239,9 +239,9 @@ async function flushOutbox() {
         // Remove this item from the queue after sending
         await removeItemFromQueue(item.seq);
         
-        // Small delay to ensure proper sequencing
+        // Reduced delay for faster processing
         if (i < batch.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 50));
+          await new Promise(resolve => setTimeout(resolve, 30));
         }
       } else {
         console.log(`[Background] ❌ Check WebSocket not ready (state: ${wsCheck?.readyState})`);

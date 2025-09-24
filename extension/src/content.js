@@ -171,8 +171,8 @@ async function sendWordsFromQueue() {
   isSendingWords = true;
   
   try {
-    // Send words in batches to maintain order
-    const batchSize = 10; // Send 10 words at a time
+    // Send words in larger batches for better throughput
+    const batchSize = 25; // Increased from 10 to 25 words at a time
     const batch = wordQueue.splice(0, batchSize);
     
     console.log(`[Content] 📤 Sending batch of ${batch.length} words to background`);
@@ -190,13 +190,13 @@ async function sendWordsFromQueue() {
     
     console.log(`[Content] ✅ Sent batch: ${batch.map(w => w.word.text).join(' ')}`);
     
-    // Small delay before next batch
+    // Reduced delay for faster processing
     setTimeout(() => {
       isSendingWords = false;
       if (wordQueue.length > 0) {
         sendWordsFromQueue();
       }
-    }, 200);
+    }, 100); // Reduced from 200ms to 50ms
     
   } catch (error) {
     console.error('[Content] Error sending word batch:', error);
@@ -253,8 +253,8 @@ async function processNextLineInQueue() {
   } finally {
     isProcessingLine = false;
     
-    // Process next line if available
-    setTimeout(() => processNextLineInQueue(), 50);
+    // Process next line if available - immediate processing for better latency
+    setTimeout(() => processNextLineInQueue(), 20);
   }
 }
 
@@ -1126,7 +1126,7 @@ function bootstrap() {
   // This prevents race conditions and ensures proper sequencing
   setTimeout(() => {
     processExistingRows(transcriptContainer);
-  }, 100); // Small delay to ensure everything is set up
+  }, 10); // Reduced delay for faster startup
 }
 
 if (document.readyState === 'loading') {

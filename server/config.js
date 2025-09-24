@@ -15,10 +15,10 @@ const defaults = {
   WS_BASE_URL: 'wss://overimaginatively-pellicular-temeka.ngrok-free.dev',
   WS_URL: 'ws://localhost:8080',
 
-  // Transcript Processing
+  // Transcript Processing - Optimized for low latency
   TRANSCRIPT_END_TIMEOUT: 5000,
-  BATCH_SIZE: 50,
-  SEND_INTERVAL: 50,
+  BATCH_SIZE: 100, // Increased for better throughput
+  SEND_INTERVAL: 20, // Reduced for faster processing
 
   // Logging
   LOG_LEVEL: 'info',
