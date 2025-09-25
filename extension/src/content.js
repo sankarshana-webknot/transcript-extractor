@@ -1058,13 +1058,67 @@ function displayFactCheckResult(result) {
   console.log('[Transcript Extractor] Fact-check result displayed:', result.verdict);
 }
 
-// Listen for fact-check results from background script
+// Listen for messages from background script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'fact_check_result') {
     console.log('[Transcript Extractor] Received fact-check result:', message.data);
     displayFactCheckResult(message.data);
+  } else if (message.type === 'transcript_event_response') {
+    console.log('[Transcript Extractor] Received transcript event response:', message.data);
+    handleTranscriptEventResponse(message.data);
   }
 });
+
+function handleTranscriptEventResponse(response) {
+  const { event, status, message: msg, sessionId } = response;
+  
+  switch (event) {
+    case 'transcript.start':
+      if (status === 'success') {
+        console.log('[Transcript Extractor] ✅ Server confirmed transcript session started:', sessionId);
+        // Update UI to show session is active
+        updateSessionStatus(true, sessionId);
+      } else {
+        console.log('[Transcript Extractor] ❌ Server failed to start transcript session:', msg);
+        updateSessionStatus(false, null);
+      }
+      break;
+      
+    case 'transcript.pause':
+      console.log('[Transcript Extractor] ⏸️ Server confirmed transcript paused');
+      updateSessionStatus(false, sessionId);
+      break;
+      
+    case 'transcript.resume':
+      console.log('[Transcript Extractor] ▶️ Server confirmed transcript resumed');
+      updateSessionStatus(true, sessionId);
+      break;
+      
+    case 'transcript.end':
+      if (status === 'success') {
+        console.log('[Transcript Extractor] 🛑 Server confirmed transcript session ended:', sessionId);
+        updateSessionStatus(false, null);
+      }
+      break;
+  }
+}
+
+function updateSessionStatus(isActive, sessionId) {
+  // Update the fact-check results box to show session status
+  const factCheckBox = document.getElementById('fact-check-results-box');
+  if (factCheckBox) {
+    const header = factCheckBox.querySelector('.fact-check-header h3');
+    if (header) {
+      if (isActive) {
+        header.textContent = `🔍 Fact Check Results (Active: ${sessionId})`;
+        header.style.color = '#28a745';
+      } else {
+        header.textContent = '🔍 Fact Check Results (Inactive)';
+        header.style.color = '#dc3545';
+      }
+    }
+  }
+}
 
 function bootstrap() {
   console.log('[Transcript Extractor] Starting bootstrap...');

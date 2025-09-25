@@ -126,6 +126,26 @@ async function ensureCheckSocket() {
             }
           });
         }
+        
+        // Handle transcript event responses
+        if (msg.type === 'transcript_event') {
+          console.log('[Background] 📋 TRANSCRIPT_EVENT received:', msg);
+          
+          // Send transcript event response to content script
+          chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+            if (tabs[0]) {
+              chrome.tabs.sendMessage(tabs[0].id, {
+                type: 'transcript_event_response',
+                data: msg
+              });
+            }
+          });
+        }
+        
+        // Handle warnings
+        if (msg.type === 'warning') {
+          console.log('[Background] ⚠️ WARNING received:', msg.message);
+        }
       } catch (e) {
         console.log('[Background] Non-JSON check message:', ev.data);
       }
@@ -212,26 +232,54 @@ async function flushOutbox() {
   
   // Send batch to append endpoint (main server expects batch format)
   const batch = outbox.slice(0, BATCH_SIZE);
+  
+  // Separate transcript events from word events
+  const transcriptEvents = batch.filter(item => 
+    item.type === 'transcript.start' || 
+    item.type === 'transcript.pause' || 
+    item.type === 'transcript.resume' || 
+    item.type === 'transcript.end'
+  );
+  const wordEvents = batch.filter(item => item.type === 'word.create');
+  
+  // Send transcript events to check endpoint
+  for (const event of transcriptEvents) {
+    if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
+      wsCheck.send(JSON.stringify(event));
+      console.log(`[Background] ✅ Sent transcript event to check: ${event.type}`);
+      // Remove transcript events from queue after sending
+      await removeItemFromQueue(event.seq);
+    } else {
+      console.log(`[Background] ❌ Check WebSocket not ready for transcript event, ensuring connection...`);
+      await ensureCheckSocket();
+      // Retry sending the event
+      if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
+        wsCheck.send(JSON.stringify(event));
+        console.log(`[Background] ✅ Retry sent transcript event to check: ${event.type}`);
+        await removeItemFromQueue(event.seq);
+      }
+    }
+  }
   try {
     // Send batch to append endpoint
     if (websocket && websocket.readyState === WebSocket.OPEN) {
-      const batchMessage = { type: 'batch', items: batch };
+      const batchMessage = { type: 'batch', items: wordEvents };
       websocket.send(JSON.stringify(batchMessage));
-      console.log(`[Background] ✅ Sent batch of ${batch.length} items to append endpoint`);
+      console.log(`[Background] ✅ Sent batch of ${wordEvents.length} items to append endpoint`);
     } else {
       console.log(`[Background] ❌ Append WebSocket not ready (state: ${websocket?.readyState})`);
     }
     
     // Send individual words to check endpoint (for real-time checking)
     // Process words sequentially to maintain order
-    for (let i = 0; i < batch.length; i++) {
-      const item = batch[i];
+    for (let i = 0; i < wordEvents.length; i++) {
+      const item = wordEvents[i];
       const wordText = item.word?.text || item.data?.word?.text || 'unknown';
       
       if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
         const checkMessage = { word: wordText };
         wsCheck.send(JSON.stringify(checkMessage));
-        console.log(`[Background] ✅ Sent word ${i + 1}/${batch.length} to check: "${wordText}"`);
+        console.log(`[Background] ✅ Sent word ${i + 1}/${wordEvents.length} to check: "${wordText}"`);
         console.log(`[Background] 📤 CHECK_WS_SEND:`, {
           message: checkMessage
         });
@@ -240,7 +288,7 @@ async function flushOutbox() {
         await removeItemFromQueue(item.seq);
         
         // Reduced delay for faster processing
-        if (i < batch.length - 1) {
+        if (i < wordEvents.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 30));
         }
       } else {
@@ -364,36 +412,63 @@ chrome.runtime.onMessage.addListener(async (message, _sender, _sendResponse) => 
     }
     case "transcript.end": {
       console.log('[Background] Transcript ended:', message);
-      // Send transcript end event to server
-      enqueue([{
+      // Send transcript end event to server immediately
+      const endEvent = {
         type: 'transcript.end',
         sessionId: message.sessionId,
         totalLines: message.totalLines,
         timestampMs: message.timestampMs
-      }]);
+      };
+      
+      // Send immediately to check endpoint
+      if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
+        wsCheck.send(JSON.stringify(endEvent));
+        console.log('[Background] ✅ Sent transcript.end immediately to check endpoint');
+      } else {
+        console.log('[Background] ❌ Check WebSocket not ready, queuing transcript.end');
+        enqueue([endEvent]);
+      }
       break;
     }
     case "transcript.resume": {
       console.log('[Background] Transcript processing resumed:', message.sessionId);
       // Update session ID in meta
       setMeta({ sessionId: message.sessionId });
-      // Send resume event to server
-      enqueue([{
+      // Send resume event to server immediately
+      const resumeEvent = {
         type: 'transcript.resume',
         sessionId: message.sessionId,
         timestampMs: message.timestampMs
-      }]);
+      };
+      
+      // Send immediately to check endpoint
+      if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
+        wsCheck.send(JSON.stringify(resumeEvent));
+        console.log('[Background] ✅ Sent transcript.resume immediately to check endpoint');
+      } else {
+        console.log('[Background] ❌ Check WebSocket not ready, queuing transcript.resume');
+        enqueue([resumeEvent]);
+      }
       break;
     }
     case "transcript.pause": {
       console.log('[Background] Transcript processing paused:', message.sessionId);
-      // Send pause event to server (keep data intact)
-      enqueue([{
+      // Send pause event to server immediately (keep data intact)
+      const pauseEvent = {
         type: 'transcript.pause',
         sessionId: message.sessionId,
         totalLines: message.totalLines,
         timestampMs: message.timestampMs
-      }]);
+      };
+      
+      // Send immediately to check endpoint
+      if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
+        wsCheck.send(JSON.stringify(pauseEvent));
+        console.log('[Background] ✅ Sent transcript.pause immediately to check endpoint');
+      } else {
+        console.log('[Background] ❌ Check WebSocket not ready, queuing transcript.pause');
+        enqueue([pauseEvent]);
+      }
       // Don't clear outbox - keep data for when we resume
       console.log('[Background] Transcript paused, data preserved');
       break;
@@ -402,14 +477,23 @@ chrome.runtime.onMessage.addListener(async (message, _sender, _sendResponse) => 
       console.log('[Background] New transcript started:', message.sessionId);
       // Update session ID in meta
       setMeta({ sessionId: message.sessionId });
-      // Send transcript start event to server
-      enqueue([{
+      // Send transcript start event to server immediately
+      const startEvent = {
         type: 'transcript.start',
         sessionId: message.sessionId,
         timestamp: message.timestamp,
         lineNumber: message.lineNumber,
         timestampMs: message.timestampMs
-      }]);
+      };
+      
+      // Send immediately to check endpoint
+      if (wsCheck && wsCheck.readyState === WebSocket.OPEN) {
+        wsCheck.send(JSON.stringify(startEvent));
+        console.log('[Background] ✅ Sent transcript.start immediately to check endpoint');
+      } else {
+        console.log('[Background] ❌ Check WebSocket not ready, queuing transcript.start');
+        enqueue([startEvent]);
+      }
       console.log('[Background] New transcript session started');
       break;
     }
