@@ -15,6 +15,10 @@ let buttonObserver = null;
 let currentSessionId = null;
 let factCheckResultsBox = null;
 
+// Session state management
+let sessionState = 'idle'; // 'idle', 'active', 'paused'
+let isSessionStarted = false;
+
 // Sequential processing state
 let processingQueue = []; // Queue of lines waiting to be processed
 let isProcessingLine = false; // Flag to prevent concurrent line processing
@@ -661,7 +665,7 @@ function createFactCheckResultsBox() {
       position: fixed;
       top: 20px;
       right: 20px;
-      width: 400px;
+      width: 450px;
       max-height: 600px;
       background: white;
       border: 2px solid #ddd;
@@ -710,21 +714,25 @@ function createFactCheckResultsBox() {
       background: #f8f9fa;
     }
     
-    .case-controls-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
+    .case-dropdown-row {
       margin-bottom: 8px;
     }
     
+    .case-controls-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    
     .case-dropdown {
-      flex: 1;
+      width: 100%;
       padding: 6px 8px;
       border: 1px solid #ccc;
       border-radius: 4px;
       font-size: 14px;
       background: white;
-      max-width: 250px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -738,12 +746,14 @@ function createFactCheckResultsBox() {
     }
     
     .control-btn {
-      padding: 6px 12px;
+      padding: 8px 12px;
       border: none;
       border-radius: 4px;
       font-size: 12px;
       cursor: pointer;
       font-weight: 500;
+      min-width: 70px;
+      flex-shrink: 0;
     }
     
     .start-btn {
@@ -755,6 +765,24 @@ function createFactCheckResultsBox() {
       background: #218838;
     }
     
+    .pause-btn {
+      background: #ffc107;
+      color: #212529;
+    }
+    
+    .pause-btn:hover {
+      background: #e0a800;
+    }
+    
+    .resume-btn {
+      background: #17a2b8;
+      color: white;
+    }
+    
+    .resume-btn:hover {
+      background: #138496;
+    }
+    
     .stop-btn {
       background: #dc3545;
       color: white;
@@ -764,9 +792,10 @@ function createFactCheckResultsBox() {
       background: #c82333;
     }
     
-    .stop-btn:disabled {
+    .control-btn:disabled {
       background: #6c757d;
       cursor: not-allowed;
+      opacity: 0.6;
     }
     
     .fact-check-content {
@@ -827,6 +856,11 @@ function createFactCheckResultsBox() {
       color: #383d41;
     }
     
+    .verdict.error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    
     .confidence {
       font-size: 12px;
       color: #666;
@@ -840,6 +874,8 @@ function createFactCheckResultsBox() {
     
     .result-content {
       padding: 12px;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
     
     .qa-pair {
@@ -849,6 +885,9 @@ function createFactCheckResultsBox() {
     .question, .answer {
       margin-bottom: 4px;
       line-height: 1.4;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      white-space: normal;
     }
     
     .question {
@@ -867,6 +906,10 @@ function createFactCheckResultsBox() {
       margin-bottom: 8px;
       font-size: 13px;
       line-height: 1.4;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      white-space: normal;
+      max-width: 100%;
     }
     
     .result-meta {
@@ -882,6 +925,9 @@ function createFactCheckResultsBox() {
       background: #e9ecef;
       padding: 2px 6px;
       border-radius: 3px;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      white-space: normal;
     }
   `;
   document.head.appendChild(style);
@@ -895,7 +941,7 @@ function createFactCheckResultsBox() {
       <button id="toggle-fact-check" class="toggle-btn">−</button>
     </div>
     <div class="case-controls">
-      <div class="case-controls-row">
+      <div class="case-dropdown-row">
         <select id="case-dropdown" class="case-dropdown">
           <option value="">Select a case...</option>
           <option value="case-001">Case 001 - Financial Planning Fraud - Doe vs. Tricor Advisors</option>
@@ -904,7 +950,11 @@ function createFactCheckResultsBox() {
           <option value="case-004">Case 004 - Investment Mismanagement - Client Group vs. Financial Planners Inc.</option>
           <option value="case-005">Case 005 - Contract Dispute - Global Ventures vs. Tricor Industries</option>
         </select>
+      </div>
+      <div class="case-controls-row">
         <button id="start-case-btn" class="control-btn start-btn">Start</button>
+        <button id="pause-case-btn" class="control-btn pause-btn" disabled>Pause</button>
+        <button id="resume-case-btn" class="control-btn resume-btn" disabled>Resume</button>
         <button id="stop-case-btn" class="control-btn stop-btn" disabled>Stop</button>
       </div>
     </div>
@@ -933,65 +983,59 @@ function createFactCheckResultsBox() {
   // Add case control functionality
   const caseDropdown = factCheckResultsBox.querySelector('#case-dropdown');
   const startBtn = factCheckResultsBox.querySelector('#start-case-btn');
+  const pauseBtn = factCheckResultsBox.querySelector('#pause-case-btn');
+  const resumeBtn = factCheckResultsBox.querySelector('#resume-case-btn');
   const stopBtn = factCheckResultsBox.querySelector('#stop-case-btn');
   
   // Enable/disable start button based on selection
   caseDropdown.addEventListener('change', () => {
-    const hasSelection = caseDropdown.value !== '';
-    startBtn.disabled = !hasSelection;
-    if (!hasSelection) {
-      stopBtn.disabled = true;
-    }
+    updateButtonStates();
   });
   
   // Start button functionality
   startBtn.addEventListener('click', () => {
     const selectedCase = caseDropdown.value;
-    if (selectedCase) {
+    if (selectedCase && sessionState === 'idle') {
       console.log('[Transcript Extractor] Starting case:', selectedCase);
-      
-      // Auto-click connect button if it shows "Connect"
-      const connectButton = document.getElementById('buttonConnect');
-      if (connectButton && connectButton.textContent.trim().toLowerCase() === 'connect') {
-        console.log('[Transcript Extractor] Auto-clicking Connect button to start transcript');
-        connectButton.click();
-      } else if (connectButton) {
-        console.log('[Transcript Extractor] Connect button state:', connectButton.textContent.trim(), '- no action needed');
-      } else {
-        console.log('[Transcript Extractor] Connect button not found');
-      }
-      
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
+      startNewSession();
       caseDropdown.disabled = true;
+    }
+  });
+  
+  // Pause button functionality
+  pauseBtn.addEventListener('click', () => {
+    if (sessionState === 'active') {
+      console.log('[Transcript Extractor] Pausing session');
+      pauseCurrentSession();
+    }
+  });
+  
+  // Resume button functionality
+  resumeBtn.addEventListener('click', () => {
+    if (sessionState === 'paused') {
+      console.log('[Transcript Extractor] Resuming session');
+      resumeCurrentSession();
     }
   });
   
   // Stop button functionality
   stopBtn.addEventListener('click', () => {
-    const selectedCase = caseDropdown.value;
-    console.log('[Transcript Extractor] Stopping case:', selectedCase);
-    
-    // Auto-click connect button if it shows "Disconnect"
-    const connectButton = document.getElementById('buttonConnect');
-    if (connectButton && connectButton.textContent.trim().toLowerCase() === 'disconnect') {
-      console.log('[Transcript Extractor] Auto-clicking Disconnect button to stop transcript');
-      connectButton.click();
-    } else if (connectButton) {
-      console.log('[Transcript Extractor] Connect button state:', connectButton.textContent.trim(), '- no action needed');
-    } else {
-      console.log('[Transcript Extractor] Connect button not found');
+    if (sessionState === 'active' || sessionState === 'paused') {
+      console.log('[Transcript Extractor] Stopping session');
+      stopCurrentSession();
     }
-    
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    caseDropdown.disabled = false;
   });
   
   console.log('[Transcript Extractor] Fact-check results box created');
 }
 
 function displayFactCheckResult(result) {
+  // Filter out results with error verdict
+  if (result.verdict === 'error' || result.verdict === 'ERROR') {
+    console.log('[Transcript Extractor] Skipping display of result with error verdict:', result.verdict);
+    return;
+  }
+  
   const content = document.getElementById('fact-check-content');
   const noResults = content.querySelector('.no-results');
   
@@ -1023,6 +1067,10 @@ function displayFactCheckResult(result) {
     case 'UNKNOWN':
       verdictClass = 'unknown';
       verdictIcon = '❓';
+      break;
+    case 'ERROR':
+      verdictClass = 'error';
+      verdictIcon = '⚠️';
       break;
   }
   
@@ -1078,26 +1126,33 @@ function handleTranscriptEventResponse(response) {
         console.log('[Transcript Extractor] ✅ Server confirmed transcript session started:', sessionId);
         // Update UI to show session is active
         updateSessionStatus(true, sessionId);
+        updateButtonStates();
       } else {
         console.log('[Transcript Extractor] ❌ Server failed to start transcript session:', msg);
         updateSessionStatus(false, null);
+        sessionState = 'idle';
+        updateButtonStates();
       }
       break;
       
     case 'transcript.pause':
       console.log('[Transcript Extractor] ⏸️ Server confirmed transcript paused');
       updateSessionStatus(false, sessionId);
+      updateButtonStates();
       break;
       
     case 'transcript.resume':
       console.log('[Transcript Extractor] ▶️ Server confirmed transcript resumed');
       updateSessionStatus(true, sessionId);
+      updateButtonStates();
       break;
       
     case 'transcript.end':
       if (status === 'success') {
         console.log('[Transcript Extractor] 🛑 Server confirmed transcript session ended:', sessionId);
         updateSessionStatus(false, null);
+        sessionState = 'idle';
+        updateButtonStates();
       }
       break;
   }
@@ -1118,6 +1173,170 @@ function updateSessionStatus(isActive, sessionId) {
       }
     }
   }
+}
+
+function updateButtonStates() {
+  const startBtn = document.getElementById('start-case-btn');
+  const pauseBtn = document.getElementById('pause-case-btn');
+  const resumeBtn = document.getElementById('resume-case-btn');
+  const stopBtn = document.getElementById('stop-case-btn');
+  const caseDropdown = document.getElementById('case-dropdown');
+  
+  if (!startBtn || !pauseBtn || !resumeBtn || !stopBtn) return;
+  
+  switch (sessionState) {
+    case 'idle':
+      // Only Start button available
+      startBtn.disabled = !caseDropdown.value;
+      pauseBtn.disabled = true;
+      resumeBtn.disabled = true;
+      stopBtn.disabled = true;
+      break;
+      
+    case 'active':
+      // Pause and Stop buttons available
+      startBtn.disabled = true;
+      pauseBtn.disabled = false;
+      resumeBtn.disabled = true;
+      stopBtn.disabled = false;
+      break;
+      
+    case 'paused':
+      // Resume and Stop buttons available
+      startBtn.disabled = true;
+      pauseBtn.disabled = true;
+      resumeBtn.disabled = false;
+      stopBtn.disabled = false;
+      break;
+  }
+}
+
+function startNewSession() {
+  console.log('[Transcript Extractor] Starting new session...');
+  
+  // Generate new session ID
+  const newSessionId = `cvn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  currentSessionId = newSessionId;
+  
+  // Reset processing state
+  lineCounter = 0;
+  processingQueue = [];
+  isProcessingLine = false;
+  currentLineIndex = 0;
+  wordQueue = [];
+  isSendingWords = false;
+  sentWordsSet.clear();
+  
+  // Set session state
+  sessionState = 'active';
+  isSessionStarted = true;
+  isTranscriptActive = true;
+  
+  // Update UI
+  updateButtonStates();
+  updateSessionStatus(true, currentSessionId);
+  
+  // Auto-click Connect button to ensure connection
+  const connectButton = document.getElementById('buttonConnect');
+  if (connectButton && connectButton.textContent.trim().toLowerCase() === 'connect') {
+    console.log('[Transcript Extractor] Auto-clicking Connect button');
+    connectButton.click();
+  }
+  
+  // Send transcript start event
+  chrome.runtime.sendMessage({
+    type: 'transcript.start',
+    sessionId: currentSessionId,
+    timestamp: new Date().toLocaleTimeString(),
+    lineNumber: '1-1',
+    timestampMs: Date.now()
+  });
+  
+  console.log('[Transcript Extractor] ✅ New session started:', currentSessionId);
+}
+
+function pauseCurrentSession() {
+  console.log('[Transcript Extractor] Pausing session...');
+  
+  sessionState = 'paused';
+  isTranscriptActive = false;
+  
+  // Update UI
+  updateButtonStates();
+  updateSessionStatus(false, currentSessionId);
+  
+  // Auto-click Disconnect button
+  const connectButton = document.getElementById('buttonConnect');
+  if (connectButton && connectButton.textContent.trim().toLowerCase() === 'disconnect') {
+    console.log('[Transcript Extractor] Auto-clicking Disconnect button');
+    connectButton.click();
+  }
+  
+  // Send pause event
+  chrome.runtime.sendMessage({
+    type: 'transcript.pause',
+    sessionId: currentSessionId,
+    totalLines: lineCounter,
+    timestampMs: Date.now()
+  });
+  
+  console.log('[Transcript Extractor] ⏸️ Session paused');
+}
+
+function resumeCurrentSession() {
+  console.log('[Transcript Extractor] Resuming session...');
+  
+  sessionState = 'active';
+  isTranscriptActive = true;
+  
+  // Update UI
+  updateButtonStates();
+  updateSessionStatus(true, currentSessionId);
+  
+  // Auto-click Connect button
+  const connectButton = document.getElementById('buttonConnect');
+  if (connectButton && connectButton.textContent.trim().toLowerCase() === 'connect') {
+    console.log('[Transcript Extractor] Auto-clicking Connect button');
+    connectButton.click();
+  }
+  
+  // Send resume event
+  chrome.runtime.sendMessage({
+    type: 'transcript.resume',
+    sessionId: currentSessionId,
+    timestampMs: Date.now()
+  });
+  
+  console.log('[Transcript Extractor] ▶️ Session resumed');
+}
+
+function stopCurrentSession() {
+  console.log('[Transcript Extractor] Stopping session...');
+  
+  // Send end event
+  chrome.runtime.sendMessage({
+    type: 'transcript.end',
+    sessionId: currentSessionId,
+    totalLines: lineCounter,
+    timestampMs: Date.now()
+  });
+  
+  // Reset session state
+  sessionState = 'idle';
+  isSessionStarted = false;
+  isTranscriptActive = false;
+  currentSessionId = null;
+  
+  // Update UI
+  updateButtonStates();
+  updateSessionStatus(false, null);
+  
+  console.log('[Transcript Extractor] 🛑 Session stopped, reloading page...');
+  
+  // Reload the page after a short delay
+  setTimeout(() => {
+    window.location.reload();
+  }, 1000);
 }
 
 function bootstrap() {
@@ -1173,7 +1392,16 @@ function bootstrap() {
   window.addEventListener('beforeunload', handlePageClose);
   console.log('[Transcript Extractor] Page close listener attached');
   
-  // Send transcript start event for page load
+  // Initialize session state
+  sessionState = 'idle';
+  isSessionStarted = false;
+  
+  // Update button states
+  setTimeout(() => {
+    updateButtonStates();
+  }, 100);
+  
+  // Send transcript start event for page load (only for initial setup)
   handlePageLoad();
   
   // Process any existing rows AFTER setting up the session and observer

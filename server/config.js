@@ -12,7 +12,7 @@ config({ path: join(rootDir, '.env') });
 // Default configuration values
 const defaults = {
   // WebSocket Configuration
-  WS_BASE_URL: 'wss://overimaginatively-pellicular-temeka.ngrok-free.dev',
+  WS_BASE_URL: 'ws://localhost:8002',
   WS_URL: 'ws://localhost:8080',
 
   // Transcript Processing - Optimized for low latency

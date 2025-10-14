@@ -5,7 +5,7 @@ async function load() {
   try {
     // Load current configuration
     const { [CONFIG_KEY]: config } = await chrome.storage.local.get(CONFIG_KEY);
-    const wsBaseUrl = config?.wsBaseUrl || "wss://overimaginatively-pellicular-temeka.ngrok-free.dev";
+    const wsBaseUrl = config?.wsBaseUrl || "ws://localhost:8002";
 
     // Set the base URL in the input field
     document.getElementById('wsBaseUrl').value = wsBaseUrl;
