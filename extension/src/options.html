@@ -14,11 +14,20 @@
   </head>
   <body>
     <div class="row">
-      <h2>Transcript Extractor</h2>
-      <label for="wsUrl">WebSocket server URL</label>
-      <input id="wsUrl" type="text" placeholder="ws://localhost:8080" />
-      <div class="hint">Updates take effect immediately.</div>
-      <button id="save">Save</button>
+      <h2>Transcript Extractor - Configuration</h2>
+      <label for="wsBaseUrl">WebSocket Base URL</label>
+      <input id="wsBaseUrl" type="text" placeholder="wss://example.com" />
+      <div class="hint">Base WebSocket URL. Append and Check endpoints will be derived from this.</div>
+      
+      <label for="wsAppendUrl">Append Endpoint URL (Derived)</label>
+      <input id="wsAppendUrl" type="text" readonly />
+      <div class="hint">WebSocket URL for sending transcript batches to append endpoint.</div>
+      
+      <label for="wsCheckUrl">Check Endpoint URL (Derived)</label>
+      <input id="wsCheckUrl" type="text" readonly />
+      <div class="hint">WebSocket URL for sending individual words to check endpoint.</div>
+      
+      <button id="save">Save Configuration</button>
     </div>
     <script src="options.js"></script>
   </body>

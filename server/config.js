@@ -11,18 +11,19 @@ config({ path: join(rootDir, '.env') });
 
 // Default configuration values
 const defaults = {
-  // Server Configuration
+  // WebSocket Configuration
+  WS_BASE_URL: 'wss://overimaginatively-pellicular-temeka.ngrok-free.dev',
   WS_URL: 'ws://localhost:8080',
-  
-  // Transcript Processing
+
+  // Transcript Processing - Optimized for low latency
   TRANSCRIPT_END_TIMEOUT: 5000,
-  BATCH_SIZE: 50,
-  SEND_INTERVAL: 50,
-  
+  BATCH_SIZE: 100, // Increased for better throughput
+  SEND_INTERVAL: 20, // Reduced for faster processing
+
   // Logging
   LOG_LEVEL: 'info',
   LOG_FORMAT: 'compact',
-  
+
   // Session Management
   SESSION_TIMEOUT: 300000,
   MAX_RECONNECT_ATTEMPTS: 10,
@@ -40,7 +41,7 @@ class Config {
     // Load from environment variables with fallback to defaults
     for (const [key, defaultValue] of Object.entries(defaults)) {
       const envValue = process.env[key];
-      
+
       if (envValue !== undefined) {
         // Type conversion based on default value type
         if (typeof defaultValue === 'number') {
@@ -57,8 +58,20 @@ class Config {
   }
 
   // Safe getter methods
+  getWsBaseUrl() {
+    return this.values.WS_BASE_URL;
+  }
+
   getWsUrl() {
     return this.values.WS_URL;
+  }
+
+  getAppendUrl() {
+    return `${this.getWsBaseUrl()}/ws/append`;
+  }
+
+  getCheckUrl() {
+    return `${this.getWsBaseUrl()}/ws/check`;
   }
 
   getPort() {
@@ -114,6 +127,19 @@ class Config {
   validate() {
     const errors = [];
 
+    // Validate WS_BASE_URL format
+    try {
+      const baseUrl = new URL(this.getWsBaseUrl());
+      if (!['ws:', 'wss:'].includes(baseUrl.protocol)) {
+        errors.push('WS_BASE_URL must use ws:// or wss:// protocol');
+      }
+      if (!baseUrl.hostname) {
+        errors.push('WS_BASE_URL must include a valid hostname');
+      }
+    } catch (e) {
+      errors.push('WS_BASE_URL must be a valid URL');
+    }
+
     // Validate WS_URL format
     try {
       const url = new URL(this.getWsUrl());
@@ -153,7 +179,7 @@ export const appConfig = new Config();
 // Validate configuration on load
 try {
   appConfig.validate();
-//   console.log('Configuration loaded successfully:', appConfig.getAll());
+  //   console.log('Configuration loaded successfully:', appConfig.getAll());
   console.log('Configuration loaded successfully');
 } catch (error) {
   console.error('Configuration validation failed:', error.message);

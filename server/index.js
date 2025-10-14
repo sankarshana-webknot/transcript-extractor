@@ -46,6 +46,15 @@ wss.on('connection', (ws) => {
           const timestamp = src.timestamp || '';
           const lineNumber = src.lineNumber || '';
           console.log(`[${s}] - ${timestamp}, ${lineNumber}: ${w.text}`);
+        } else if (item.type === 'transcript.start') {
+          console.log(`[${s}] *** NEW TRANSCRIPT STARTED *** at ${new Date(item.timestampMs).toISOString()}`);
+          console.log(`[${s}] - ${item.lineNumber} - ${item.timestamp}`);
+        } else if (item.type === 'transcript.resume') {
+          console.log(`[${s}] Transcript session RESUMED at ${new Date(item.timestampMs).toISOString()}`);
+        } else if (item.type === 'transcript.pause') {
+          console.log(`[${s}] Transcript session PAUSED at ${new Date(item.timestampMs).toISOString()} (${item.totalLines} lines processed)`);
+        } else if (item.type === 'transcript.end') {
+          console.log(`[${s}] Transcript ended at ${new Date(item.timestampMs).toISOString()} (${item.totalLines} lines)`);
         }
       }
       clientState.get(ws).lastAckSeq = maxSeq;
