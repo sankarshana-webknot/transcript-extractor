@@ -1,8 +1,8 @@
 /* Background service worker: maintains outbound WebSocket with acks, retries, and buffering. */
 
 // Configuration constants - these will be set from config
-let APPEND_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/append";
-let CHECK_URL = "wss://overimaginatively-pellicular-temeka.ngrok-free.dev/ws/check";
+let APPEND_URL = "ws://localhost:8002/ws/append";
+let CHECK_URL = "ws://localhost:8002/ws/check";
 const BATCH_SIZE = 50;
 const SEND_INTERVAL = 100; // Reduced from 500ms to 50ms
 const MAX_RECONNECT_DELAY = 30000;

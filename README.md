@@ -16,7 +16,7 @@ nano .env
 
 ### Available Configuration Options:
 
-- **WS_BASE_URL**: Base WebSocket URL for extension endpoints (default: wss://overimaginatively-pellicular-temeka.ngrok-free.dev)
+- **WS_BASE_URL**: Base WebSocket URL for extension endpoints (default: ws://localhost:8002)
 - **WS_URL**: Complete WebSocket server URL (default: ws://localhost:8080)
 - **TRANSCRIPT_END_TIMEOUT**: Timeout for transcript end detection in ms (default: 5000)
 - **BATCH_SIZE**: Number of messages to batch together (default: 50)
